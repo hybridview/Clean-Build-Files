@@ -1,8 +1,17 @@
 #
 # NOTE: Might need to open an adminstrative ps prompt to clean files if VS solution was opened as ADMIN.
 #
-# VERSION: 20150220
+# VERSION: 20170221
+#
+# TODO: 
+#   + Why was the 0 file get written to this directory before???
+#   + IMPORTANT: Address issue as mentioned at this article! https://www.simple-talk.com/dotnet/net-framework/practical-powershell-pruning-file-trees-and-extending-cmdlets/
+#   + When no args passed, prompt user for options. We still get quick launch when launching with args.
+#   + Allow to customize folders via command arg as well as file.
+#   + Still some strange errors for some folders about "length" cannot be found when using Measure-object, even after I test 
+#     for it. Not sure how the error is possible. Doesn't seem to affect results, so will look later.
 
+#. GetChildItemExtension.ps1
 
 
 
@@ -23,12 +32,15 @@ function Clean-Build-Files($Values = $args)
         powershell.exe D:\BTSync\!Projects\Common\Powershell\CleanBuildFiles\Clean-Build-Files.ps1 '-excludelistpath=D:\BTSync\!Projects\Common\Powershell\CleanBuildFiles\exclude-list.txt' '-targetfolder=D:\OssDevRoot\hybridview\HomeGenie' -viewonly
    
     #>
-
+	
     # Defaults in case user passes no args.
     $excludeListFilePath = "exclude-list.txt"
+	$includeListFilePath = "include-list.txt"
     $targetFolder = (Get-Location -PSProvider FileSystem).ProviderPath
-    $viewOnly=0
+    $viewOnly=1
 
+	#$includeFolderNameList = "bin,obj,node_modules"
+	
     foreach($value in $Values){
 		Write-Host $value
         $arrTmp = $value.Split("=")
@@ -42,61 +54,125 @@ function Clean-Build-Files($Values = $args)
             -viewonly {
                 $viewOnly=1
             }
+			-includelistpath {
+                $includeListFilePath = $arrTmp[1]
+            }
             -help {
                 Clean-Build-Files-Show-Help
                 exit
             }
         }
     }
-
-    $ExcludeList = Get-Content -Path $excludeListFilePath | Select-Object
-    #. $excludeListFilePath
-
+	
+	if ($viewOnly -eq 1) {
+       Write-Host ' ! Running in VIEW ONLY mode. No files will be deleted!' -foregroundcolor yellow
+    }
+				
+	if (Test-Path $includeListFilePath) 
+	{
+		$IncludeList = Get-Content -Path $includeListFilePath | Select-Object
+	} else {
+		$IncludeList = @("bin","obj")
+		Write-Host "No include list file located. Using defaults."
+	}
+	
+	if (Test-Path $excludeListFilePath) 
+	{
+		$ExcludeList = Get-Content -Path $excludeListFilePath | Select-Object
+	} else {
+		$ExcludeList = @()
+		Write-Host "No exclude list file located. Using defaults."
+	}
+	
+    
+	
     #
     # Display configuration options.
     #
 
     $CurrentPath = $targetFolder
 
-    Write-Host
+	Write-Host
+    Write-Host 'Inclusion List ('$IncludeList.Count' found):' -foregroundcolor gray
+    foreach($include in $IncludeList){
+		Write-Host '   ' $include -foregroundcolor green
+    }
+
     Write-Host 'Exclusion List ('$ExcludeList.Count' found):' -foregroundcolor gray
     foreach($exclude in $ExcludeList){
 		Write-Host '   ' $exclude -foregroundcolor gray
     }
     Write-Host
-
+	Write-Host
+	
     Write-Host 'Removing files...' -foregroundcolor white
     #$_ -notmatch '_tools' -and $_ -notmatch '_build'
     # recursively get all folders matching given includes, except ignored folders
-
-    $FoldersToRemove = Get-ChildItem $CurrentPath -include bin,obj -Recurse  | where {$_ -notmatch (
-        '(' + [string]::Join(')|(', $ExcludeList) + ')') } | foreach {$_.fullname}
+	$ObjFoldersToRemove = Get-ChildItem $CurrentPath -include $IncludeList -Recurse
+	if ($ExcludeList.Count -gt 0) 
+	{
+		$ObjFoldersToRemove = $ObjFoldersToRemove | where {$_ -notmatch (
+			'(' + [string]::Join(')|(', $ExcludeList) + ')') }
+	}
+	#$ObjFoldersToRemove = Get-ChildItem $CurrentPath -include "$includeFolderNameList" -Recurse | where {$_ -notmatch (
+    #    '(' + [string]::Join(')|(', $ExcludeList) + ')') }
+	
+    $FoldersToRemove = $ObjFoldersToRemove | foreach {$_.fullname}
 
 
     # Some script code below based on: https://github.com/doblak/ps-clean/blob/master/DeleteObjBinFolders.ps1
 
     # recursively get all folders matching given includes
-    $AllFolders = Get-ChildItem $CurrentPath -include bin,obj -Recurse | foreach {$_.fullname}
-
+    $AllFoldersObj = Get-ChildItem $CurrentPath -include $IncludeList -Recurse 
+	$AllFolders = $AllFoldersObj | foreach {$_.fullname}
     # subtract arrays to calculate ignored ones
     $IgnoredFolders = $AllFolders | where {$FoldersToRemove -notcontains $_} 
 
     $ItemsRemovedCount = 0
+	$TotalSpaceKbCleared = 0
+	#$TotalSpaceMbCleared = ($AllFoldersObj | Measure-Object -Sum length)
+	
 
-    # remove folders and print to output
-    if($FoldersToRemove -ne $null)
+	if($ObjFoldersToRemove -ne $null)
     {			
         Write-Host 
-	    foreach ($item in $FoldersToRemove) 
+	    foreach ($objitem in $ObjFoldersToRemove) 
 	    { 
             Try
             {
-                Write-Host "Removing: ." $item.replace($CurrentPath, "")  -nonewline; 
+				$item = $objitem.fullname
+				$temp = Get-ChildItem $item -Recurse -Force
+				
+				$sizeBytes = 0
+				#$hasProp = [bool]($temp.PSobject.Properties.name -match "length")
+				$hasProp = [bool]($temp.PSobject.Properties.Name -contains "length")
+				if ($hasProp) #$temp -ne $null)
+				{
+					if ($temp.length -ne $null) {
+						$sizeObj = $temp | Measure-Object -property length -sum
+						$sizeBytes = $sizeObj.Sum
+					}
+				}
+				
+				$sizeKBytes = [math]::Round($sizeBytes / 1024)
+				
+                Write-Host "Removing: " $item.replace($CurrentPath, "") -nonewline; 
+				
                 if ($viewOnly -eq 0) {
                     remove-item $item -Force -Recurse -ea stop; # Instructs PS to generate terminating error if error occurs here. That way, we can use the try catch.
                 }
-                Write-Host " [Removed]" -foregroundcolor green;
+                Write-Host " [Removed $sizeKBytes KB]" -foregroundcolor green;
+				#Write-Host $sizeKBytes -foregroundcolor green -nonewline; 
+				#Write-Host " KB]" -foregroundcolor green;
+				 
                 $ItemsRemovedCount++
+				$TotalSpaceKbCleared += $sizeKBytes
+				
+				#$directory | Get-ChildItem |
+				#  Measure-Object -Sum Length | Select-Object `
+				#	@{Name=”Path”; Expression={$directory.FullName}},
+				#	@{Name=”Files”; Expression={$_.Count}},
+				#	@{Name=”Size”; Expression={$_.Sum}}
             }
             Catch [system.exception]
             {
@@ -110,13 +186,14 @@ function Clean-Build-Files($Values = $args)
 	    } 
     }
 
+	
     # print ignored folders	to output
     if($IgnoredFolders -ne $null)
     {
         Write-Host 
 	    foreach ($item in $IgnoredFolders) 
 	    { 
-		    Write-Host "Ignored: . " -foregroundcolor yellow -nonewline; 
+		    Write-Host "Ignored: " -foregroundcolor yellow -nonewline; 
 		    Write-Host $item.replace($CurrentPath, ""); 
 	    } 
 	
@@ -128,7 +205,7 @@ function Clean-Build-Files($Values = $args)
     Write-Host 
     if($FoldersToRemove -ne $null)
     {
-	    Write-Host $ItemsRemovedCount "folders removed" -foregroundcolor green
+	    Write-Host $ItemsRemovedCount "folders removed ($TotalSpaceKbCleared KB)" -foregroundcolor green
 	    #Write-Host $FoldersToRemove.count-$ItemsRemovedCount "folders removed" -foregroundcolor green
     }
     else { 	Write-Host "No folders to remove" -foregroundcolor green }	
@@ -138,6 +215,8 @@ function Clean-Build-Files($Values = $args)
     # prevent closing the window immediately
     $dummy = Read-Host "Completed, press enter to continue."
 }
+
+
 
 function Clean-Build-Files-Show-Help()
 {

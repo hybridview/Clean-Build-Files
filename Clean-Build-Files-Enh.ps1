@@ -3,16 +3,17 @@
 #
 # VERSION: 20170221
 #
+# DEPENDENCY: When exclude filter is used, this version of the script uses Get-Child-Enhanced (might improve performance, but will it differ from my match filter in orig script?) which can be found at: https://www.simple-talk.com/dotnet/net-framework/practical-powershell-pruning-file-trees-and-extending-cmdlets/
+#
 # TODO: 
-#   + Why was the 0 file get written to this directory before???
 #   + IMPORTANT: Address issue as mentioned at this article! https://www.simple-talk.com/dotnet/net-framework/practical-powershell-pruning-file-trees-and-extending-cmdlets/
 #   + When no args passed, prompt user for options. We still get quick launch when launching with args.
 #   + Allow to customize folders via command arg as well as file.
 #   + Still some strange errors for some folders about "length" cannot be found when using Measure-object, even after I test 
 #     for it. Not sure how the error is possible. Doesn't seem to affect results, so will look later.
 
-#. GetChildItemExtension.ps1
 
+. .\GetChildItemExtension.ps1
 
 
 # PowerShell script that recursively deletes all 'bin' and 'obj' (or any other specified) folders inside current folder
@@ -37,7 +38,7 @@ function Clean-Build-Files($Values = $args)
     $excludeListFilePath = "exclude-list.txt"
 	$includeListFilePath = "include-list.txt"
     $targetFolder = (Get-Location -PSProvider FileSystem).ProviderPath
-    $viewOnly=0
+    $viewOnly=1
 
 	#$includeFolderNameList = "bin,obj,node_modules"
 	
@@ -80,7 +81,7 @@ function Clean-Build-Files($Values = $args)
 	{
 		$ExcludeList = Get-Content -Path $excludeListFilePath | Select-Object
 	} else {
-		$ExcludeList = @()
+		$ExcludeList = @("browserify")
 		Write-Host "No exclude list file located. Using defaults."
 	}
 	
@@ -108,11 +109,12 @@ function Clean-Build-Files($Values = $args)
     Write-Host 'Removing files...' -foregroundcolor white
     #$_ -notmatch '_tools' -and $_ -notmatch '_build'
     # recursively get all folders matching given includes, except ignored folders
-	$ObjFoldersToRemove = Get-ChildItem $CurrentPath -include $IncludeList -Recurse
+	$ObjFoldersToRemove = Get-EnhancedChildItem $CurrentPath -include $IncludeList -Recurse -ExcludeTree $ExcludeList
 	if ($ExcludeList.Count -gt 0) 
 	{
-		$ObjFoldersToRemove = $ObjFoldersToRemove | where {$_ -notmatch (
-			'(' + [string]::Join(')|(', $ExcludeList) + ')') }
+		$ObjFoldersToRemove = Get-EnhancedChildItem $CurrentPath -include $IncludeList -Recurse -ExcludeTree $ExcludeList
+	} else {
+		$ObjFoldersToRemove = Get-ChildItem $CurrentPath -include "$includeFolderNameList" -Recurse
 	}
 	#$ObjFoldersToRemove = Get-ChildItem $CurrentPath -include "$includeFolderNameList" -Recurse | where {$_ -notmatch (
     #    '(' + [string]::Join(')|(', $ExcludeList) + ')') }
@@ -123,7 +125,7 @@ function Clean-Build-Files($Values = $args)
     # Some script code below based on: https://github.com/doblak/ps-clean/blob/master/DeleteObjBinFolders.ps1
 
     # recursively get all folders matching given includes
-    $AllFoldersObj = Get-ChildItem $CurrentPath -include $IncludeList -Recurse 
+    $AllFoldersObj = Get-EnhancedChildItem $CurrentPath -include $IncludeList -Recurse 
 	$AllFolders = $AllFoldersObj | foreach {$_.fullname}
     # subtract arrays to calculate ignored ones
     $IgnoredFolders = $AllFolders | where {$FoldersToRemove -notcontains $_} 
